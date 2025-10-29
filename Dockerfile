@@ -1,117 +1,27 @@
-# Multi-stage build to minimize final image size
-FROM ubuntu:22.04 AS builder
+# Super minimal and fast build
+FROM alpine:3.18
 
-# Avoid interactive prompts
-ARG DEBIAN_FRONTEND=noninteractive
-
-# Install base dependencies and add LLVM repository
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    flex \
-    bison \
-    git \
-    wget \
-    gnupg \
-    software-properties-common \
-    lsb-release \
-    ca-certificates \
-    && wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add - \
-    && echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-18 main" >> /etc/apt/sources.list.d/llvm.list \
-    && apt-get update \
-    && apt-get install -y \
-    clang-18 \
-    llvm-18-dev \
-    llvm-18-tools \
-    lld-18 \
-    libclang-18-dev \
-    cargo \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install modern CMake from Kitware repository
-RUN wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc | gpg --dearmor - | tee /etc/apt/trusted.gpg.d/kitware.gpg >/dev/null \
-    && echo 'deb https://apt.kitware.com/ubuntu/ jammy main' | tee /etc/apt/sources.list.d/kitware.list >/dev/null \
-    && apt-get update \
-    && apt-get install -y cmake \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create symbolic links for LLVM tools
-RUN ln -sf /usr/bin/clang-18 /usr/bin/clang++ && \
-    ln -sf /usr/bin/llvm-config-18 /usr/bin/llvm-config && \
-    ln -sf /usr/bin/llvm-profdata-18 /usr/bin/llvm-profdata && \
-    ln -sf /usr/bin/llvm-cov-18 /usr/bin/llvm-cov
+# Install minimal dependencies
+RUN apk add --no-cache \
+    g++ \
+    cmake \
+    make \
+    llvm18-dev \
+    clang18 \
+    musl-dev \
+    && ln -sf /usr/bin/clang-18 /usr/bin/clang++ \
+    && ln -sf /usr/bin/clang-18 /usr/bin/clang
 
 WORKDIR /app
-
-# Copy source code
 COPY . .
 
-# Configure CMake with same options as coverage.sh
-RUN cmake -Bbuild \
-    -DLLVM_ENABLE_ASSERTIONS=1 \
-    -DLLVM_ENABLE_PROJECTS="clang" \
-    -DLLVM_TARGETS_TO_BUILD="X86" \
-    -DENABLE_ASAN=OFF \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DFROM_SOURCE=0 \
-    -DCMAKE_CXX_COMPILER=clang++
+# Minimal build - just the compiler binary
+RUN cmake -Bbuild -DCMAKE_BUILD_TYPE=MinSizeRel -DFROM_SOURCE=0 \
+    && cmake --build build --target gluc -j$(nproc) \
+    && strip build/tools/gluc/gluc
 
-# Build the project
-RUN cmake --build build -j$(nproc)
-
-# Stage 2: Minimal runtime image
-FROM ubuntu:22.04
-
-ARG DEBIAN_FRONTEND=noninteractive
-
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
-    wget \
-    gnupg \
-    lsb-release \
-    && wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key | apt-key add - \
-    && echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-18 main" >> /etc/apt/sources.list.d/llvm.list \
-    && apt-get update \
-    && apt-get install -y \
-    clang-18 \
-    llvm-18-runtime \
-    llvm-18-tools \
-    libc6-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-# Create symbolic links for runtime tools
-RUN ln -sf /usr/bin/clang-18 /usr/bin/clang && \
-    ln -sf /usr/bin/clang-18 /usr/bin/clang++ && \
-    ln -sf /usr/bin/llvm-profdata-18 /usr/bin/llvm-profdata && \
-    ln -sf /usr/bin/llvm-cov-18 /usr/bin/llvm-cov
-
-# Create non-root user
-RUN useradd -m -s /bin/bash glu
-
-WORKDIR /app
-
-# Copy compiled binaries from builder stage
-COPY --from=builder /app/build/tools/gluc/gluc /usr/local/bin/
-COPY --from=builder /app/build/tools/glu-demangle/glu-demangle /usr/local/bin/
-COPY --from=builder /app/build/test/unit_tests /app/
-# Copy shared libraries directly to /usr/local/lib
-COPY --from=builder /app/build/lib/*/*.so /usr/local/lib/
-COPY --from=builder /app/build/tools/lib/ /usr/local/lib/
-COPY --from=builder /app/test/functional/ /app/test/functional/
-
-# Update dynamic library cache
-RUN ldconfig
-
-# Set permissions
-RUN chown -R glu:glu /app && \
-    chmod +x /usr/local/bin/gluc
-
-# Switch to non-root user
-USER glu
-
-# Default command
+# Final tiny image
+FROM alpine:3.18
+RUN apk add --no-cache libstdc++ musl
+COPY --from=0 /app/build/tools/gluc/gluc /usr/local/bin/
 CMD ["gluc", "--help"]
-
-# Metadata labels
-LABEL maintainer="Glu Language Team"
-LABEL description="Glu Programming Language - A modern glue language for connecting and interoperating with other languages via LLVM"
-LABEL version="latest"

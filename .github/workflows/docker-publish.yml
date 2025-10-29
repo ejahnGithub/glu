@@ -2,7 +2,7 @@ name: Publish Docker image
 
 on:
   push:
-    branches: [ release ]
+    branches: [release]
   release:
     types: [published]
   workflow_dispatch:
@@ -39,7 +39,7 @@ jobs:
         with:
           images: |
             ghcr.io/${{ github.repository }}
-            lindon18/glu
+            ${{ secrets.DOCKER_USERNAME }}/glu
 
       - name: Build and push Docker images
         id: push

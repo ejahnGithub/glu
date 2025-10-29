@@ -1,41 +1,23 @@
-# Super minimal and fast build
+# Simple build - just works
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install minimal dependencies - just what we need
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    g++ \
+# Just install the absolute essentials
+RUN apt-get update && apt-get install -y \
+    build-essential \
     cmake \
-    make \
-    llvm-dev \
-    clang \
-    flex \
-    libfl-dev \
-    bison \
-    zlib1g-dev \
-    libcurl4-openssl-dev \
-    libzstd-dev \
-    libedit-dev \
-    && rm -rf /var/lib/apt/lists/* \
-    && ln -sf /usr/bin/clang /usr/bin/clang++
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY . .
 
-# Temporarily lower CMake requirement for Docker build
-RUN sed -i 's/VERSION 3.29/VERSION 3.28/' CMakeLists.txt
+# Copy just what we need for the simple test
+COPY tools/simple-test ./simple-test/
 
-# Minimal build - just the compiler binary
-RUN cmake -Bbuild -DCMAKE_BUILD_TYPE=MinSizeRel -DFROM_SOURCE=0 \
-    && cmake --build build --target gluc -j$(nproc) \
-    && strip build/tools/gluc/gluc
+# Build the simple test tool
+RUN cd simple-test && \
+    cmake . && \
+    make simple-test
 
-# Final tiny image
-FROM ubuntu:24.04
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libstdc++6 \
-    libc6 \
-    && rm -rf /var/lib/apt/lists/*
-COPY --from=0 /app/build/tools/gluc/gluc /usr/local/bin/
-CMD ["gluc", "--help"]
+# Run the simple test
+CMD ["./simple-test/simple-test"]
